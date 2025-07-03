@@ -146,5 +146,5 @@ Para dúvidas ou problemas:
 
 ---
 
-Desenvolvido com ❤️ pela equipe Manus AI
+Desenvolvido com ❤️ pela Noble
 
