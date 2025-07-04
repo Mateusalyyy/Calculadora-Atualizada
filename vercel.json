@@ -23,16 +23,12 @@
       "dest": "frontend/dist/$1"
     }
   ],
-  "env": {
-    "DATABASE_URL": "@database_url",
-    "SECRET_KEY": "@secret_key",
-    "ALGORITHM": "HS256",
-    "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
-    "ALLOWED_ORIGINS": "[\"*\"]",
-    "ADMIN_EMAIL": "@admin_email",
-    "ADMIN_PASSWORD": "@admin_password",
-    "ENVIRONMENT": "production"
-  },
+"env": {
+  "ALGORITHM": "HS256",
+  "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
+  "ALLOWED_ORIGINS": "[\"*\"]",
+  "ENVIRONMENT": "production"
+}
   "installCommand": "cd frontend && npm install && cd ../backend && pip install -r requirements.txt",
   "buildCommand": "cd frontend && npm run build"
 }
