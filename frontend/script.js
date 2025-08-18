@@ -1,343 +1,303 @@
-// Configurações da calculadora
+// Aguarda o carregamento completo do HTML para iniciar o script
+document.addEventListener('DOMContentLoaded', initializeApp);
+
+// --- CONFIGURAÇÕES GLOBAIS ---
 const CONFIG = {
-    // Preços de mão de obra por localização
     maoDeObra: {
-        mogi: {
-            valorMinimo: 200, // até 1m²
-            valorMetroLinear: 200 // acima de 1m²
-        },
-        'capital-sp': {
-            valorMinimo: 280, // até 1m²
-            valorMetroLinear: 200 // acima de 1m²
-        }
+        mogi: { valorMinimo: 200, valorMetroLinear: 200 },
+        'capital-sp': { valorMinimo: 280, valorMetroLinear: 200 }
     },
-    
-    // URL da API (será configurada dinamicamente)
-    apiUrl: 'http://localhost:5000/api'
+    // A URL da API agora é relativa, o Vercel saberá para onde direcionar.
+    apiUrl: '/api' 
 };
 
-// Estado da aplicação
+// --- ESTADO DA APLICAÇÃO ---
+// Centraliza todos os dados dinâmicos da calculadora
 let state = {
-    materiais: [],
+    materiaisSelecionados: [],
     precosPorM2: {},
-    totalMaterial: 0,
-    totalMaoDeObra: 0,
-    totalGeral: 0,
-    areaTotal: 0
+    areaTotal: 0,
+    custoTotal: 0
 };
 
-// Inicialização da aplicação
-document.addEventListener('DOMContentLoaded', function() {
-    initializeApp();
-});
-
+/**
+ * Função principal que inicializa a aplicação
+ */
 function initializeApp() {
     setupEventListeners();
     loadMaterialPrices();
-    setupFormValidation();
+    // Não é mais necessário validar o formulário de cliente aqui,
+    // pois ele não faz parte do cálculo inicial.
 }
 
+/**
+ * Configura todos os "ouvintes" de eventos da página
+ */
 function setupEventListeners() {
-    // Event listeners para checkboxes de material
-    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', handleMaterialSelection);
-    });
+    // Delegação de eventos para os itens de material para melhor performance
+    const materialItemsContainer = document.getElementById('material-items');
+    materialItemsContainer.addEventListener('change', handleMaterialChange);
+    materialItemsContainer.addEventListener('input', handleMeasurementChange);
 
-    // Event listeners para campos de medidas
-    const measurementInputs = document.querySelectorAll('.measurements input');
-    measurementInputs.forEach(input => {
-        input.addEventListener('input', calculateArea);
-    });
+    document.getElementById('local-mao-de-obra').addEventListener('change', calculateTotal);
+    document.getElementById('calculate-btn').addEventListener('click', handleQuoteGeneration);
 
-    // Event listener para o botão de calcular
-    const calculateBtn = document.getElementById('calculate-btn');
-    calculateBtn.addEventListener('click', calculateTotal);
-
-    // Event listener para mudança de localização
-    const localSelect = document.getElementById('local-mao-de-obra');
-    localSelect.addEventListener('change', calculateTotal);
-
-    // Máscara para CPF/CNPJ
-    const cpfCnpjInput = document.getElementById('cpf-cnpj');
-    cpfCnpjInput.addEventListener('input', applyCpfCnpjMask);
-
-    // Máscara para CEP
-    const cepInput = document.getElementById('cep');
-    cepInput.addEventListener('input', applyCepMask);
-
-    // Máscara para celular
-    const celularInput = document.getElementById('celular');
-    celularInput.addEventListener('input', applyCelularMask);
+    // Máscaras para os campos de input
+    document.getElementById('cpf-cnpj').addEventListener('input', applyMask(maskCpfCnpj));
+    document.getElementById('cep').addEventListener('input', applyMask(maskCep));
+    document.getElementById('celular').addEventListener('input', applyMask(maskCelular));
 }
 
-function handleMaterialSelection(event) {
+/**
+ * Lida com a seleção (checkbox) de um material
+ * @param {Event} event - O evento de 'change'
+ */
+function handleMaterialChange(event) {
+    if (event.target.type !== 'checkbox') return;
+
     const checkbox = event.target;
     const materialItem = checkbox.closest('.material-item');
-    const measurements = materialItem.querySelector('.measurements');
-    
+    const measurementsDiv = materialItem.querySelector('.measurements');
+    const materialId = checkbox.id;
+
     if (checkbox.checked) {
-        measurements.style.display = 'grid';
-        measurements.classList.add('show');
+        measurementsDiv.style.display = 'grid';
         materialItem.classList.add('selected');
-        
-        // Adicionar ao estado
-        const materialId = checkbox.id;
-        if (!state.materiais.find(m => m.id === materialId)) {
-            state.materiais.push({
+        // Adiciona material ao estado se não existir
+        if (!state.materiaisSelecionados.find(m => m.id === materialId)) {
+            state.materiaisSelecionados.push({
                 id: materialId,
-                nome: checkbox.nextElementSibling.textContent,
-                area: 0,
-                preco: 0
+                nome: checkbox.nextElementSibling.textContent.trim(),
+                area: 0
             });
         }
     } else {
-        measurements.style.display = 'none';
-        measurements.classList.remove('show');
+        measurementsDiv.style.display = 'none';
         materialItem.classList.remove('selected');
-        
-        // Remover do estado
-        const materialId = checkbox.id;
-        state.materiais = state.materiais.filter(m => m.id !== materialId);
-        
-        // Limpar campos de medida
-        const inputs = measurements.querySelectorAll('input');
-        inputs.forEach(input => input.value = '');
-        
-        // Limpar display de área
-        const areaDisplay = measurements.querySelector('.area-display');
-        areaDisplay.textContent = '0 m²';
+        // Remove material do estado
+        state.materiaisSelecionados = state.materiaisSelecionados.filter(m => m.id !== materialId);
+        // Limpa campos de medida e área
+        measurementsDiv.querySelectorAll('input').forEach(input => input.value = '');
+        measurementsDiv.querySelector('.area-display').textContent = '0 m²';
     }
-    
     calculateTotal();
 }
 
-function calculateArea(event) {
-    const input = event.target;
-    const measurements = input.closest('.measurements');
-    const materialItem = measurements.closest('.material-item');
-    const checkbox = materialItem.querySelector('input[type="checkbox"]');
+/**
+ * Lida com a alteração nos campos de medida (largura, comprimento, etc.)
+ * @param {Event} event - O evento de 'input'
+ */
+function handleMeasurementChange(event) {
+    if (event.target.type !== 'number') return;
+    calculateArea(event.target);
+    calculateTotal();
+}
+
+/**
+ * Calcula a área de um item específico
+ * @param {HTMLElement} inputElement - O campo de input que foi alterado
+ */
+function calculateArea(inputElement) {
+    const measurementsDiv = inputElement.closest('.measurements');
+    const materialId = measurementsDiv.closest('.material-item').querySelector('input[type="checkbox"]').id;
     
-    if (!checkbox.checked) return;
+    const largura = parseFloat(measurementsDiv.querySelector('.largura')?.value) || 0;
+    const comprimento = parseFloat(measurementsDiv.querySelector('.comprimento')?.value) || 0;
     
-    const largura = parseFloat(measurements.querySelector('.largura').value) || 0;
-    const comprimento = parseFloat(measurements.querySelector('.comprimento').value) || 0;
-    const altura = parseFloat(measurements.querySelector('.altura').value) || 0;
+    const area = (largura * comprimento) / 10000; // cm² para m²
     
-    // Calcular área em m² (convertendo de cm para m)
-    let area = 0;
-    if (largura > 0 && comprimento > 0) {
-        area = (largura * comprimento) / 10000; // cm² para m²
-    }
-    
-    // Para alguns itens, pode ser necessário considerar a altura
-    const materialId = checkbox.id;
-    if (['fechamento-lateral', 'divisoria', 'painel-parede'].includes(materialId)) {
-        if (largura > 0 && altura > 0) {
-            area = (largura * altura) / 10000;
-        }
-    }
-    
-    // Atualizar display
-    const areaDisplay = measurements.querySelector('.area-display');
-    areaDisplay.textContent = `${area.toFixed(2)} m²`;
-    
-    // Atualizar estado
-    const material = state.materiais.find(m => m.id === materialId);
+    measurementsDiv.querySelector('.area-display').textContent = `${area.toFixed(3)} m²`;
+
+    const material = state.materiaisSelecionados.find(m => m.id === materialId);
     if (material) {
         material.area = area;
     }
-    
-    calculateTotal();
 }
 
+/**
+ * Carrega os preços dos materiais (simulado, idealmente viria da API)
+ */
 async function loadMaterialPrices() {
-    try {
-        // Simular preços por m² (em produção, viria da API Monday.com)
-        state.precosPorM2 = {
-            'bancada': 350,
-            'fechamento-lateral': 280,
-            'frontao': 320,
-            'saia': 250,
-            'rodabase': 180,
-            'tabeira': 200,
-            'baguete': 150,
-            'soleira': 220,
-            'pingadeira': 190,
-            'virada': 300,
-            'borda-piscina': 400,
-            'divisoria': 350,
-            'escada-pisada': 380,
-            'escada-espelho': 320,
-            'lavatorio-esculpido': 800,
-            'lavatorio-cuba': 450,
-            'mesa': 500,
-            'painel': 380,
-            'painel-parede': 350,
-            'patamar': 400,
-            'peitoril': 250,
-            'rodape': 120
-        };
-        
-        console.log('Preços carregados:', state.precosPorM2);
-    } catch (error) {
-        console.error('Erro ao carregar preços:', error);
-        showNotification('Erro ao carregar preços. Usando valores padrão.', 'warning');
-    }
+    // Em um cenário real, isso faria uma chamada à API:
+    // const prices = await fetch(`${CONFIG.apiUrl}/materials/prices`).then(res => res.json());
+    // state.precosPorM2 = prices;
+    
+    // Usando dados simulados por enquanto:
+    state.precosPorM2 = {
+        'bancada': 350, 'fechamento-lateral': 280, 'frontao': 320, 'saia': 250,
+        'rodabase': 180, 'tabeira': 200, 'baguete': 150, 'soleira': 220,
+        'pingadeira': 190, 'virada': 300, 'borda-piscina': 400, 'divisoria': 350,
+        'escada-pisada': 380, 'escada-espelho': 320, 'lavatorio-esculpido': 800,
+        'lavatorio-cuba': 450, 'mesa': 500, 'painel': 380, 'painel-parede': 350,
+        'patamar': 400, 'peitoril': 250, 'rodape': 120
+    };
+    console.log('Preços dos materiais carregados.');
 }
 
+/**
+ * Calcula o custo total do orçamento e atualiza a tela
+ */
 function calculateTotal() {
-    // Calcular total de material
-    state.totalMaterial = 0;
-    state.areaTotal = 0;
-    
-    state.materiais.forEach(material => {
+    const custoMaterial = state.materiaisSelecionados.reduce((total, material) => {
         const precoM2 = state.precosPorM2[material.id] || 0;
-        material.preco = material.area * precoM2;
-        state.totalMaterial += material.preco;
-        state.areaTotal += material.area;
-    });
-    
-    // Calcular mão de obra
+        return total + (material.area * precoM2);
+    }, 0);
+
+    state.areaTotal = state.materiaisSelecionados.reduce((total, material) => total + material.area, 0);
+
     const local = document.getElementById('local-mao-de-obra').value;
     const configMaoDeObra = CONFIG.maoDeObra[local];
-    
-    if (state.areaTotal <= 1) {
-        state.totalMaoDeObra = configMaoDeObra.valorMinimo;
-    } else {
-        state.totalMaoDeObra = state.areaTotal * configMaoDeObra.valorMetroLinear;
+    let custoMaoDeObra = 0;
+    if (state.areaTotal > 0) {
+        custoMaoDeObra = state.areaTotal <= 1 ? configMaoDeObra.valorMinimo : state.areaTotal * configMaoDeObra.valorMetroLinear;
     }
     
-    // Total geral
-    state.totalGeral = state.totalMaterial + state.totalMaoDeObra;
+    state.custoTotal = custoMaterial + custoMaoDeObra;
     
-    // Atualizar display
-    updateTotalDisplay();
+    updateTotalDisplay(state.custoTotal);
 }
 
-function updateTotalDisplay() {
+/**
+ * Atualiza o elemento de preço total na tela
+ * @param {number} total - O valor total a ser exibido
+ */
+function updateTotalDisplay(total) {
     const totalPriceElement = document.getElementById('total-price');
-    totalPriceElement.textContent = formatCurrency(state.totalGeral);
-    
-    // Adicionar animação
-    totalPriceElement.style.transform = 'scale(1.1)';
-    setTimeout(() => {
-        totalPriceElement.style.transform = 'scale(1)';
-    }, 200);
+    totalPriceElement.textContent = formatCurrency(total);
 }
 
+/**
+ * Formata um número para o padrão de moeda brasileiro (BRL)
+ * @param {number} value - O número a ser formatado
+ * @returns {string} - O valor formatado como moeda
+ */
 function formatCurrency(value) {
     return new Intl.NumberFormat('pt-BR', {
         style: 'currency',
         currency: 'BRL'
-    }).format(value);
+    }).format(value || 0);
 }
 
-// Máscaras de input
-function applyCpfCnpjMask(event) {
-    let value = event.target.value.replace(/\D/g, '');
-    
+// --- MÁSCARAS DE INPUT ---
+const applyMask = (maskFn) => (event) => {
+    event.target.value = maskFn(event.target.value);
+};
+
+const maskCpfCnpj = (value) => {
+    value = value.replace(/\D/g, '');
     if (value.length <= 11) {
-        // CPF: 000.000.000-00
-        value = value.replace(/(\d{3})(\d)/, '$1.$2');
-        value = value.replace(/(\d{3})(\d)/, '$1.$2');
-        value = value.replace(/(\d{3})(\d{1,2})$/, '$1-$2');
-    } else {
-        // CNPJ: 00.000.000/0000-00
-        value = value.replace(/^(\d{2})(\d)/, '$1.$2');
-        value = value.replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3');
-        value = value.replace(/\.(\d{3})(\d)/, '.$1/$2');
-        value = value.replace(/(\d{4})(\d)/, '$1-$2');
+        return value
+            .replace(/(\d{3})(\d)/, '$1.$2')
+            .replace(/(\d{3})(\d)/, '$1.$2')
+            .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
     }
-    
-    event.target.value = value;
-}
+    return value.slice(0, 14)
+        .replace(/^(\d{2})(\d)/, '$1.$2')
+        .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+        .replace(/\.(\d{3})(\d)/, '.$1/$2')
+        .replace(/(\d{4})(\d)/, '$1-$2');
+};
 
-function applyCepMask(event) {
-    let value = event.target.value.replace(/\D/g, '');
-    value = value.replace(/^(\d{5})(\d)/, '$1-$2');
-    event.target.value = value;
-}
+const maskCep = (value) => value.replace(/\D/g, '').replace(/^(\d{5})(\d)/, '$1-$2').slice(0, 9);
+const maskCelular = (value) => value.replace(/\D/g, '').replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2').slice(0, 15);
 
-function applyCelularMask(event) {
-    let value = event.target.value.replace(/\D/g, '');
-    value = value.replace(/^(\d{2})(\d)/, '($1) $2');
-    value = value.replace(/(\d{5})(\d)/, '$1-$2');
-    event.target.value = value;
-}
 
-// Validação de formulário
-function setupFormValidation() {
-    const requiredFields = document.querySelectorAll('input[required]');
-    
-    requiredFields.forEach(field => {
-        field.addEventListener('blur', validateField);
-        field.addEventListener('input', clearFieldError);
-    });
-}
+// --- VALIDAÇÃO E GERAÇÃO DO ORÇAMENTO ---
 
-function validateField(event) {
-    const field = event.target;
-    const value = field.value.trim();
-    
-    if (!value) {
-        showFieldError(field, 'Este campo é obrigatório');
+/**
+ * Valida o formulário de cliente
+ * @returns {boolean} - True se o formulário for válido, false caso contrário
+ */
+function validateClientForm() {
+    const form = document.getElementById('client-form');
+    if (!form.checkValidity()) {
+        // O navegador mostrará as mensagens de erro padrão para campos 'required'
+        form.reportValidity();
         return false;
     }
-    
-    // Validações específicas
-    switch (field.type) {
-        case 'email':
-            if (!isValidEmail(value)) {
-                showFieldError(field, 'Email inválido');
-                return false;
-            }
-            break;
-        case 'tel':
-            if (value.length < 14) {
-                showFieldError(field, 'Celular inválido');
-                return false;
-            }
-            break;
-    }
-    
-    clearFieldError(field);
     return true;
 }
 
-function isValidEmail(email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
-}
-
-function showFieldError(field, message) {
-    clearFieldError(field);
-    
-    field.style.borderColor = '#e74c3c';
-    
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'field-error';
-    errorDiv.style.color = '#e74c3c';
-    errorDiv.style.fontSize = '0.8rem';
-    errorDiv.style.marginTop = '0.25rem';
-    errorDiv.textContent = message;
-    
-    field.parentNode.appendChild(errorDiv);
-}
-
-function clearFieldError(field) {
-    const errorDiv = field.parentNode.querySelector('.field-error');
-    if (errorDiv) {
-        errorDiv.remove();
+/**
+ * Lida com o clique no botão "Calcular Orçamento", que agora salva o orçamento
+ */
+async function handleQuoteGeneration() {
+    if (!validateClientForm()) {
+        showNotification('Por favor, preencha todos os dados do cliente.', 'warning');
+        return;
     }
-    field.style.borderColor = '';
+    if (state.materiaisSelecionados.length === 0 || state.areaTotal === 0) {
+        showNotification('Selecione ao menos um material e preencha as medidas.', 'warning');
+        return;
+    }
+
+    const quoteData = {
+        client_data: {
+            name: document.getElementById('nome').value,
+            phone: document.getElementById('celular').value,
+            email: document.getElementById('email').value,
+            document: document.getElementById('cpf-cnpj').value,
+            address: document.getElementById('endereco').value,
+            zip_code: document.getElementById('cep').value
+        },
+        items: state.materiaisSelecionados.map(m => ({ name: m.nome, area: m.area })),
+        labor_location: document.getElementById('local-mao-de-obra').value,
+        total_price: state.custoTotal
+    };
+
+    try {
+        showLoading(true);
+        const response = await fetch(`${CONFIG.apiUrl}/budgets`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(quoteData)
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Erro ao salvar orçamento.');
+        }
+
+        const result = await response.json();
+        showNotification('Orçamento salvo com sucesso!', 'success');
+        console.log('Orçamento salvo:', result);
+
+    } catch (error) {
+        showNotification(error.message, 'error');
+        console.error('Falha ao salvar orçamento:', error);
+    } finally {
+        showLoading(false);
+    }
 }
 
-// Notificações
+// --- FUNÇÕES UTILITÁRIAS ---
+
+function showLoading(isLoading) {
+    document.body.classList.toggle('loading', isLoading);
+    document.getElementById('calculate-btn').disabled = isLoading;
+}
+
 function showNotification(message, type = 'info') {
+    // Remove qualquer notificação existente
+    const existingNotification = document.querySelector('.notification');
+    if (existingNotification) {
+        existingNotification.remove();
+    }
+
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
-    notification.style.cssText = `
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        notification.addEventListener('transitionend', () => notification.remove());
+    }, 3000);
+}
+
+// Adiciona os estilos da notificação dinamicamente para não poluir o CSS
+const notificationStyle = `
+    .notification {
         position: fixed;
         top: 20px;
         right: 20px;
@@ -346,150 +306,20 @@ function showNotification(message, type = 'info') {
         color: white;
         font-weight: 500;
         z-index: 1000;
-        animation: slideIn 0.3s ease-out;
-    `;
-    
-    switch (type) {
-        case 'success':
-            notification.style.background = '#27ae60';
-            break;
-        case 'warning':
-            notification.style.background = '#f39c12';
-            break;
-        case 'error':
-            notification.style.background = '#e74c3c';
-            break;
-        default:
-            notification.style.background = '#3498db';
+        transition: opacity 0.5s, transform 0.5s;
+        transform: translateX(0);
+        opacity: 1;
     }
-    
-    notification.textContent = message;
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease-out';
-        setTimeout(() => {
-            document.body.removeChild(notification);
-        }, 300);
-    }, 3000);
-}
-
-// Função para gerar orçamento (futura integração)
-function generateQuote() {
-    const clientData = getClientData();
-    const materialData = state.materiais.filter(m => m.area > 0);
-    const local = document.getElementById('local-mao-de-obra').value;
-    
-    const quote = {
-        cliente: clientData,
-        materiais: materialData,
-        localInstalacao: local,
-        valores: {
-            material: state.totalMaterial,
-            maoDeObra: state.totalMaoDeObra,
-            total: state.totalGeral
-        },
-        areaTotal: state.areaTotal,
-        dataOrcamento: new Date().toISOString()
-    };
-    
-    console.log('Orçamento gerado:', quote);
-    return quote;
-}
-
-function getClientData() {
-    return {
-        nome: document.getElementById('nome').value,
-        celular: document.getElementById('celular').value,
-        email: document.getElementById('email').value,
-        cpfCnpj: document.getElementById('cpf-cnpj').value,
-        endereco: document.getElementById('endereco').value,
-        cep: document.getElementById('cep').value
-    };
-}
-
-// Adicionar estilos para animações
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
+    .notification.notification-info { background: #3498db; }
+    .notification.notification-success { background: #27ae60; }
+    .notification.notification-warning { background: #f39c12; }
+    .notification.notification-error { background: #e74c3c; }
+    .notification.fade-out {
+        opacity: 0;
+        transform: translateX(20px);
     }
-    
-    @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-    }
-    
-    #total-price {
-        transition: transform 0.2s ease;
-    }
+    body.loading { opacity: 0.8; pointer-events: none; }
 `;
-document.head.appendChild(style);
-
-// Função para integração futura com Monday.com
-async function fetchMondayPrices() {
-    try {
-        const response = await fetch(`${CONFIG.apiUrl}/materials/prices`);
-        if (!response.ok) {
-            throw new Error('Erro ao buscar preços');
-        }
-        
-        const prices = await response.json();
-        state.precosPorM2 = prices;
-        
-        showNotification('Preços atualizados com sucesso!', 'success');
-        calculateTotal();
-    } catch (error) {
-        console.error('Erro ao buscar preços do Monday.com:', error);
-        showNotification('Erro ao atualizar preços. Usando valores em cache.', 'warning');
-    }
-}
-
-// Função para salvar orçamento (futura integração)
-async function saveQuote() {
-    try {
-        const quote = generateQuote();
-        
-        const response = await fetch(`${CONFIG.apiUrl}/quotes`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(quote)
-        });
-        
-        if (!response.ok) {
-            throw new Error('Erro ao salvar orçamento');
-        }
-        
-        const result = await response.json();
-        showNotification('Orçamento salvo com sucesso!', 'success');
-        return result;
-    } catch (error) {
-        console.error('Erro ao salvar orçamento:', error);
-        showNotification('Erro ao salvar orçamento', 'error');
-        throw error;
-    }
-}
-
-// Exportar funções para uso global
-window.calculadoraDCoratto = {
-    generateQuote,
-    saveQuote,
-    fetchMondayPrices,
-    state
-};
-
+const styleSheet = document.createElement("style");
+styleSheet.innerText = notificationStyle;
+document.head.appendChild(styleSheet);
