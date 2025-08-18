@@ -1,2 +1,0 @@
-# Core configurations and utilities
-
